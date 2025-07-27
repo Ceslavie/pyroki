@@ -15,13 +15,20 @@ def solve_trajopt(
     robot_coll: pk.collision.RobotCollision,
     world_coll: Sequence[pk.collision.CollGeom],
     target_link_name: str,
-    start_position: onp.ndarray,
-    start_wxyz: onp.ndarray,
-    end_position: onp.ndarray,
-    end_wxyz: onp.ndarray,
+    start_position: ArrayLike,
+    start_wxyz: ArrayLike,
+    end_position: ArrayLike,
+    end_wxyz: ArrayLike,
     timesteps: int,
     dt: float,
-) -> onp.ndarray:
+) -> ArrayLike:
+    if isinstance(start_position, onp.ndarray):
+        np = onp
+    elif isinstance(start_position, jnp.ndarray):
+        np = jnp
+    else:
+        raise ValueError(f"Invalid type for `ArrayLike`: {type(start_position)}")
+
     # 1. Solve IK for the start and end poses.
     target_link_index = robot.links.names.index(target_link_name)
     start_cfg, end_cfg = solve_iks_with_collision(
@@ -38,35 +45,13 @@ def solve_trajopt(
     # 2. Initialize the trajectory through linearly interpolating the start and end poses.
     init_traj = jnp.linspace(start_cfg, end_cfg, timesteps)
 
-    # 3. Optimize the trajectory (JIT-compiled).
-    solution = _solve_trajopt_jax(
-        robot,
-        robot_coll,
-        world_coll,
-        start_cfg,
-        end_cfg,
-        init_traj,
-        timesteps,
-        dt,
-    )
-    return onp.array(solution)
-
-
-# JIT-compiled core function
-@jdc.jit
-def _solve_trajopt_jax(
-    robot: pk.Robot,
-    robot_coll: pk.collision.RobotCollision,
-    world_coll: Sequence[pk.collision.CollGeom],
-    start_cfg: jax.Array,
-    end_cfg: jax.Array,
-    init_traj: jax.Array,
-    timesteps: jdc.Static[int],
-    dt: jdc.Static[float],
-) -> jax.Array:
+    # 3. Optimize the trajectory.
     traj_vars = robot.joint_var_cls(jnp.arange(timesteps))
-    robot = jax.tree.map(lambda x: x[None], robot)
-    robot_coll = jax.tree.map(lambda x: x[None], robot_coll)
+
+    robot = jax.tree.map(lambda x: x[None], robot)  # Add batch dimension.
+    robot_coll = jax.tree.map(lambda x: x[None], robot_coll)  # Add batch dimension.
+
+    # Basic regularization / limit costs.
     factors: list[jaxls.Cost] = [
         pk.costs.rest_cost(
             traj_vars,
@@ -80,6 +65,7 @@ def _solve_trajopt_jax(
         ),
     ]
 
+    # Collision avoidance.
     def compute_world_coll_residual(
         vals: jaxls.VarValues,
         robot: pk.Robot,
@@ -112,6 +98,7 @@ def _solve_trajopt_jax(
             )
         )
 
+    # Start / end pose constraints.
     factors.extend(
         [
             jaxls.Cost(
@@ -127,6 +114,7 @@ def _solve_trajopt_jax(
         ]
     )
 
+    # Velocity / acceleration / jerk minimization.
     factors.extend(
         [
             pk.costs.smoothness_cost(
@@ -165,6 +153,7 @@ def _solve_trajopt_jax(
         ]
     )
 
+    # 4. Solve the optimization problem.
     solution = (
         jaxls.LeastSquaresProblem(
             factors,
@@ -175,7 +164,7 @@ def _solve_trajopt_jax(
             initial_vals=jaxls.VarValues.make((traj_vars.with_value(init_traj),)),
         )
     )
-    return solution[traj_vars]
+    return np.array(solution[traj_vars])
 
 
 @jdc.jit

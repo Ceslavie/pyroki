@@ -54,7 +54,7 @@ def main(robot_name: Literal["ur5", "panda"] = "panda"):
         np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0])
     )
     # - Wall
-    wall_height = 0.5
+    wall_height = 0.4
     wall_width = 0.1
     wall_length = 0.4
     wall_intervals = np.arange(start=0.3, stop=wall_length + 0.3, step=0.05)
@@ -73,6 +73,9 @@ def main(robot_name: Literal["ur5", "panda"] = "panda"):
     )
     world_coll = [ground_coll, wall_coll]
 
+
+    # 第一次调用
+    t0 = time.time()
     traj = pks.solve_trajopt(
         robot,
         robot_coll,
@@ -85,37 +88,91 @@ def main(robot_name: Literal["ur5", "panda"] = "panda"):
         timesteps,
         dt,
     )
+    t1 = time.time()
+    elapsed1 = t1 - t0
+
+    # 第二次调用
+    t0 = time.time()
+    traj = pks.solve_trajopt(
+        robot,
+        robot_coll,
+        world_coll,
+        target_link_name,
+        start_pos,
+        down_wxyz,
+        end_pos,
+        down_wxyz,
+        timesteps,
+        dt,
+    )
+    t1 = time.time()
+    elapsed2 = t1 - t0
+
+    # # - Wall
+    # wall_height = 0.4
+    # wall_width = 0.1
+    # wall_length = 0.4
+    # wall_intervals = np.arange(start=0.2, stop=wall_length + 0.2, step=0.05)
+    # translation = np.concatenate(
+    #     [
+    #         wall_intervals.reshape(-1, 1),
+    #         np.full((wall_intervals.shape[0], 1), 0.0),
+    #         np.full((wall_intervals.shape[0], 1), wall_height/2),
+    #     ],
+    #     axis=1,
+    # )
+    # wall_coll = pk.collision.Capsule.from_radius_height(
+    #     position=translation,
+    #     radius=np.full((translation.shape[0], 1), wall_width / 2),
+    #     height=np.full((translation.shape[0], 1), wall_height),
+    # )
+    # ground_coll = pk.collision.HalfSpace.from_point_and_normal(
+    #     np.array([0.0, 0.0, 0.4]), np.array([0.0, 0.0, -1.0])
+    # )
+    wall_coll = wall_coll.transform_from_wxyz_position(
+        wxyz=np.array([1, 0, 0, 0]),
+        position=np.array([0.01, 0.0, 0.0]),
+    )
+    world_coll = [ground_coll, wall_coll]
+
+    # 第三次调用
+    # start_pos, end_pos = np.array([0.4, -0.3, 0.3]), np.array([0.4, 0.3, 0.3])
+    t0 = time.time()
+    traj = pks.solve_trajopt(
+        robot,
+        robot_coll,
+        world_coll,
+        target_link_name,
+        start_pos,
+        down_wxyz,
+        end_pos,
+        down_wxyz,
+        timesteps,
+        dt,
+    )
+    t1 = time.time()
+    elapsed3 = t1 - t0
+
     traj = np.array(traj)
+
+    # 汇总彩色打印
+    print(f"\033[92m第一次调用耗时: {elapsed1:.3f} 秒\033[0m")
+    print(f"\033[93m第二次调用耗时: {elapsed2:.3f} 秒\033[0m")
+    print(f"\033[91m第三次调用耗时: {elapsed3:.3f} 秒\033[0m")
 
     # Visualize!
     server = viser.ViserServer()
     urdf_vis = ViserUrdf(server, urdf)
     server.scene.add_grid("/grid", width=2, height=2, cell_size=0.1)
-    # 保留原有box可视化
     server.scene.add_mesh_trimesh(
         "wall_box",
         trimesh.creation.box(
             extents=(wall_length, wall_width, wall_height),
             transform=trimesh.transformations.translation_matrix(
-                np.array([0.5, 0.0, wall_height / 2])
+                np.array([0.5, 0.0, wall_height/2])
             ),
         ),
     )
-    # 新增wall_coll胶囊体可视化
-    for i in range(translation.shape[0]):
-        capsule_center = translation[i]
-        capsule_radius = wall_width / 2
-        capsule_height = wall_height
-        capsule_mesh = trimesh.creation.capsule(
-            radius=capsule_radius,
-            height=capsule_height,
-            count=[32, 32]
-        )
-        capsule_mesh.apply_translation(capsule_center)
-        server.scene.add_mesh_trimesh(
-            f"wall_capsule_{i}",
-            capsule_mesh,
-        )
     for name, pos in zip(["start", "end"], [start_pos, end_pos]):
         server.scene.add_frame(
             f"/{name}",
